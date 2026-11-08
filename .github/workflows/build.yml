@@ -25,6 +25,7 @@ jobs:
           tar -xJf wordflow-source.tar.xz
           test -f app/build.gradle
           test -f scripts/verify_source.sh
+          chmod +x scripts/test_parser.sh
 
       - name: Set up Java
         uses: actions/setup-java@v4
