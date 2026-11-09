@@ -3,6 +3,10 @@ package dev.wordflow.app;
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -87,6 +91,7 @@ public final class WordBackup {
             words.put(word);
         }
         root.put("words", words);
+        root.put("contentSha256", checksum(snapshot));
         return root.toString(2);
     }
 
@@ -114,7 +119,54 @@ public final class WordBackup {
         }
         Snapshot snapshot = new Snapshot(entries, settings);
         validate(snapshot);
+        if (root.has("contentSha256")) {
+            Object check = root.get("contentSha256");
+            if (!(check instanceof String)
+                    || !MessageDigest.isEqual(((String) check).getBytes(StandardCharsets.US_ASCII),
+                    checksum(snapshot).getBytes(StandardCharsets.US_ASCII))) {
+                throw new JSONException("Backup checksum mismatch");
+            }
+        }
         return snapshot;
+    }
+
+    private static void feed(MessageDigest md, String value) {
+        byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
+        md.update(ByteBuffer.allocate(4).putInt(bytes.length).array());
+        md.update(bytes);
+    }
+
+    private static String checksum(Snapshot snapshot) throws JSONException {
+        try {
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            feed(md, FORMAT);
+            feed(md, Integer.toString(VERSION));
+            SettingsData s = snapshot.settings;
+            feed(md, Integer.toString(s.seconds));
+            feed(md, s.display);
+            feed(md, s.order);
+            feed(md, Boolean.toString(s.reviewOnly));
+            feed(md, Integer.toString(snapshot.words.size()));
+            for (Entry e : snapshot.words) {
+                feed(md, Long.toString(e.id));
+                feed(md, e.english);
+                feed(md, e.meaning);
+                feed(md, Integer.toString(e.known));
+                feed(md, Integer.toString(e.failed));
+                feed(md, Integer.toString(e.seen));
+                feed(md, Long.toString(e.due));
+                feed(md, Long.toString(e.lastSeen));
+            }
+            byte[] hash = md.digest();
+            StringBuilder hex = new StringBuilder(hash.length * 2);
+            for (byte b : hash) {
+                hex.append(Character.forDigit((b >>> 4) & 15, 16));
+                hex.append(Character.forDigit(b & 15, 16));
+            }
+            return hex.toString();
+        } catch (NoSuchAlgorithmException e) {
+            throw new JSONException("SHA-256 unavailable");
+        }
     }
 
     private static String requiredString(JSONObject obj, String key) throws JSONException {
@@ -156,7 +208,7 @@ public final class WordBackup {
                     || e.known < 0 || e.failed < 0 || e.seen < 0
                     || e.due < 0 || e.lastSeen < 0)
                 throw new JSONException("Invalid word");
-            if (!ids.add(e.id) || !terms.add(e.english.toLowerCase(Locale.ROOT)))
+            if (!ids.add(e.id) || !terms.add(e.english.trim().toLowerCase(Locale.ROOT)))
                 throw new JSONException("Duplicate word ID or English term");
         }
     }

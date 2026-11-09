@@ -2,6 +2,7 @@ package dev.wordflow.app;
 
 import org.junit.Test;
 import org.json.JSONException;
+import org.json.JSONObject;
 import java.util.Arrays;
 import java.util.Collections;
 import static org.junit.Assert.*;
@@ -53,6 +54,43 @@ public final class WordBackupTest {
     @Test(expected = JSONException.class) public void rejectsInvalidSettings() throws Exception {
         WordBackup.Snapshot snapshot = sample();
         snapshot.settings.order = "unknown";
+        WordBackup.encode(snapshot);
+    }
+
+    @Test public void writesContentDigestAndPreservesOldV05Backups() throws Exception {
+        String data = WordBackup.encode(sample());
+        JSONObject doc = new JSONObject(data);
+        assertEquals(64, doc.getString("contentSha256").length());
+        doc.remove("contentSha256");
+        assertEquals(2, WordBackup.decode(doc.toString()).words.size());
+    }
+
+    @Test(expected = JSONException.class) public void rejectsModifiedWordMeaning() throws Exception {
+        String text = WordBackup.encode(sample());
+        WordBackup.decode(text.replace("苹果,水果", "篡改后的释义"));
+    }
+
+    @Test(expected = JSONException.class) public void rejectsModifiedReviewProgress() throws Exception {
+        JSONObject doc = new JSONObject(WordBackup.encode(sample()));
+        doc.getJSONArray("words").getJSONObject(0).put("known", 999);
+        WordBackup.decode(doc.toString());
+    }
+
+    @Test(expected = JSONException.class) public void rejectsModifiedSettings() throws Exception {
+        JSONObject doc = new JSONObject(WordBackup.encode(sample()));
+        doc.getJSONObject("settings").put("seconds", 50);
+        WordBackup.decode(doc.toString());
+    }
+
+    @Test(expected = JSONException.class) public void rejectsTamperedChecksum() throws Exception {
+        JSONObject doc = new JSONObject(WordBackup.encode(sample()));
+        doc.put("contentSha256", "wrong");
+        WordBackup.decode(doc.toString());
+    }
+
+    @Test(expected = JSONException.class) public void rejectsWhitespaceDuplicateWord() throws Exception {
+        WordBackup.Snapshot snapshot = sample();
+        snapshot.words.get(1).english = " apple ";
         WordBackup.encode(snapshot);
     }
     @Test(expected = JSONException.class) public void rejectsTruncatedFile() throws Exception {

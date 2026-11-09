@@ -51,6 +51,7 @@ public final class MainActivity extends Activity {
     private final ExecutorService io = Executors.newSingleThreadExecutor();
     private WordStore store;
     private WordPrefs prefs;
+    private RestoreSafetyStore safetyStore;
     private LinearLayout root;
     private LinearLayout content;
     private LinearLayout wordList;
@@ -64,6 +65,7 @@ public final class MainActivity extends Activity {
         getWindow().setNavigationBarColor(BG);
         store = new WordStore(this);
         prefs = new WordPrefs(this);
+        safetyStore = new RestoreSafetyStore(this);
         // A killed process must not leave a false "running" indicator behind.
         if (prefs.running() && !WordService.isSessionActive()) {
             prefs.running(false);
@@ -384,8 +386,13 @@ public final class MainActivity extends Activity {
         Button restoreBackup = button("从完整备份恢复", false);
         notice.addView(restoreBackup, lp(-1, dp(44)));
         restoreBackup.setOnClickListener(v -> confirmRestore());
+        spacer(notice, 8);
+        Button undoRestore = button("撤销上一次恢复", false);
+        undoRestore.setEnabled(safetyStore.exists());
+        notice.addView(undoRestore, lp(-1, dp(44)));
+        undoRestore.setOnClickListener(v -> undoLastRestore());
         spacer(notice, 6);
-        notice.addView(text("完整备份包括全部单词、学习/答错/显示次数、复习到期时间及显示设置。恢复将覆盖现有词库；备份文件未加密，请自行妥善保存。", 12, MUTED, false));
+        notice.addView(text("完整备份保留词条、学习次数、复习时间及设置，并验证 SHA-256 完整性。覆盖前生成一份本机安全副本；卸载应用会同时删除该副本。JSON 未加密，请妥善保存。", 12, MUTED, false));
         spacer(notice, 13);
         Button clear = button("清空所有单词（不可撤销）", false);
         notice.addView(clear, lp(-1, dp(44)));
@@ -541,24 +548,103 @@ public final class MainActivity extends Activity {
         io.execute(() -> {
             try (InputStream input = getContentResolver().openInputStream(uri)) {
                 if (input == null) throw new IllegalStateException("备份文件不可读");
-                // Parse and validate the entire input BEFORE starting a destructive DB transaction.
-                WordBackup.Snapshot snapshot = WordBackup.decode(readBounded(input, 25_000_000));
-                if (prefs.running() || WordService.isSessionActive())
-                    throw new IllegalStateException("请先停止当前学习会话");
-                List<WordBackup.Entry> previous = store.exportBackup();
-                store.replaceFromBackup(snapshot.words);
-                if (!prefs.restoreSettings(snapshot.settings)) {
-                    store.replaceFromBackup(previous);
-                    throw new IllegalStateException("设置保存失败，已尝试恢复原词库");
-                }
-                postUi(() -> {
-                    toast("已恢复 " + snapshot.words.size() + " 个单词及学习记录");
-                    showTab(0);
-                });
+                String raw = readBounded(input, 25_000_000);
+                // Parsing, version checking, and SHA-256 verification precede any change.
+                WordBackup.Snapshot snapshot = WordBackup.decode(raw);
+                boolean hasDigest = new org.json.JSONObject(raw).has("contentSha256");
+                postUi(() -> previewRestore(snapshot, hasDigest));
             } catch (Exception error) {
-                postUi(() -> toast("恢复失败：备份无效或无法读取，原有数据未被主动清空"));
+                postUi(() -> toast("文件校验失败：当前词库没有被修改"));
             }
         });
+    }
+
+    private void previewRestore(WordBackup.Snapshot snapshot, boolean integrityProtected) {
+        if (prefs.running() || WordService.isSessionActive()) {
+            toast("请先结束学习再恢复");
+            return;
+        }
+        int learned = 0;
+        int failed = 0;
+        for (WordBackup.Entry word : snapshot.words) {
+            if (word.known > 0) learned++;
+            if (word.failed > 0) failed++;
+        }
+        String preview = "备份内单词：" + snapshot.words.size() + " 个"
+                + "\\n曾记住：" + learned + " 个；有答错记录：" + failed + " 个"
+                + "\\n当前本机单词：" + store.count() + " 个"
+                + "\\n校验：" + (integrityProtected ? "SHA-256 已通过" : "旧备份（没有 SHA-256 校验）")
+                + "\\n\\n确认后会覆盖当前所有单词、复习进度与设置；"
+                + "操作前将保存一份本机安全副本，供撤销本次恢复。";
+        new AlertDialog.Builder(this)
+                .setTitle("预览完整备份")
+                .setMessage(preview)
+                .setNegativeButton("取消", null)
+                .setPositiveButton("确认覆盖并恢复", (dialog, which) ->
+                        io.execute(() -> applySnapshot(snapshot, true)))
+                .show();
+    }
+
+    private void undoLastRestore() {
+        if (prefs.running() || WordService.isSessionActive()) {
+            toast("请先结束学习再撤销恢复");
+            return;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("撤销上一次恢复？")
+                .setMessage("将从应用内部安全副本恢复之前的词库、学习进度和设置。"
+                        + "若还需要保留现在的数据，请先导出完整 JSON。")
+                .setNegativeButton("取消", null)
+                .setPositiveButton("撤销并恢复", (dialog, which) ->
+                        io.execute(() -> {
+                            try {
+                                WordBackup.Snapshot snapshot = safetyStore.load();
+                                applySnapshot(snapshot, false);
+                            } catch (Exception error) {
+                                postUi(() -> toast("本机安全副本读取失败，当前数据未被修改"));
+                            }
+                        }))
+                .show();
+    }
+
+    private void applySnapshot(WordBackup.Snapshot snapshot, boolean saveUndo) {
+        if (prefs.running() || WordService.isSessionActive()) {
+            postUi(() -> toast("请先停止当前学习会话"));
+            return;
+        }
+        WordBackup.Snapshot before;
+        try {
+            WordBackup.validate(snapshot);
+            before = new WordBackup.Snapshot(store.exportBackup(), prefs.backupSettings());
+            // AtomicFile guarantees a complete undo file before destructive database work.
+            if (saveUndo) safetyStore.save(before);
+        } catch (Exception error) {
+            postUi(() -> toast("无法创建恢复前安全副本，已取消操作"));
+            return;
+        }
+        boolean databaseReplaced = false;
+        try {
+            store.replaceFromBackup(snapshot.words);
+            databaseReplaced = true;
+            if (!prefs.restoreSettings(snapshot.settings))
+                throw new IllegalStateException("无法保存恢复后的设置");
+            postUi(() -> {
+                toast("已恢复 " + snapshot.words.size() + " 个单词及全部学习记录");
+                showTab(0);
+            });
+        } catch (Exception error) {
+            if (databaseReplaced) {
+                try {
+                    store.replaceFromBackup(before.words);
+                    if (!prefs.restoreSettings(before.settings))
+                        throw new IllegalStateException("无法回退设置");
+                } catch (Exception rollbackError) {
+                    postUi(() -> toast("恢复遇到错误，自动回滚失败；请勿卸载应用，使用本机安全副本重新恢复"));
+                    return;
+                }
+            }
+            postUi(() -> toast("恢复失败，原有数据已保留"));
+        }
     }
 
     private void editWord(WordStore.Word word) {
