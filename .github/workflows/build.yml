@@ -71,7 +71,7 @@ jobs:
             -storetype PKCS12 -keystore "$signing_dir/test.p12" \
             -storepass temporary-ci-test-only -keypass temporary-ci-test-only \
             -dname "CN=WordFlow disposable CI test"
-          printf 'storeFile=test.p12\\nkeyAlias=wordflow_ci_smoke\\nstorePassword=temporary-ci-test-only\\nkeyPassword=temporary-ci-test-only\\n' > "$signing_dir/signing.properties"
+          printf 'storeFile=test.p12\nkeyAlias=wordflow_ci_smoke\nstorePassword=temporary-ci-test-only\nkeyPassword=temporary-ci-test-only\n' > "$signing_dir/signing.properties"
           WF_SIGNING_PROPERTIES="$signing_dir/signing.properties" gradle --no-daemon :app:assembleRelease
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose app/build/outputs/apk/release/app-release.apk
           rm -rf "$signing_dir" app/build/outputs/apk/release
