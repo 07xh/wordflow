@@ -63,7 +63,10 @@ public final class MainActivity extends Activity {
         store = new WordStore(this);
         prefs = new WordPrefs(this);
         // A killed process must not leave a false "running" indicator behind.
-        if (prefs.running() && !WordService.isSessionActive()) prefs.running(false);
+        if (prefs.running() && !WordService.isSessionActive()) {
+            prefs.running(false);
+            prefs.clearCurrentCard();
+        }
         showTab(0);
     }
     @Override protected void onResume() {
@@ -190,6 +193,28 @@ public final class MainActivity extends Activity {
         line.addView(statItem("记住中", String.valueOf(store.learnedCount())), new LinearLayout.LayoutParams(0, dp(74), 1));
         line.addView(statItem("待复习", String.valueOf(store.dueCount())), new LinearLayout.LayoutParams(0, dp(74), 1));
         stats.addView(line);
+
+        LinearLayout currentCard = card();
+        section(currentCard, "当前单词", prefs.running() ? "与通知展示同步" : "开始学习后显示当前词条");
+        String showingEnglish = prefs.currentEnglish();
+        if (prefs.running() && !showingEnglish.isEmpty()) {
+            currentCard.addView(text(showingEnglish, 21, TEXT, true));
+            spacer(currentCard, 5);
+            currentCard.addView(text(prefs.currentMeaning(), 15, MUTED, false));
+        } else {
+            currentCard.addView(text("暂无进行中的单词", 14, MUTED, false));
+        }
+        spacer(currentCard, 10);
+        Button nextCard = button("下一个单词", false);
+        nextCard.setEnabled(prefs.running());
+        currentCard.addView(nextCard, lp(-1, dp(44)));
+        nextCard.setOnClickListener(v -> {
+            if (sendAction(WordService.NEXT)) {
+                root.postDelayed(() -> {
+                    if (!isFinishing() && !isDestroyed() && tab == 0) showTab(0);
+                }, 200);
+            }
+        });
 
         LinearLayout session = card();
         section(session, "通知背词", prefs.running() ? "学习会话已启动，可在通知中操作" : "主动开启学习，按设定间隔自动换词");
@@ -390,6 +415,9 @@ public final class MainActivity extends Activity {
             prefs.running(true);
             toast("正在启动学习，请检查通知栏");
             showTab(0);
+            root.postDelayed(() -> {
+                if (!isFinishing() && !isDestroyed() && tab == 0) showTab(0);
+            }, 200);
         }
     }
     @Override public void onRequestPermissionsResult(int request, String[] permissions, int[] results) {

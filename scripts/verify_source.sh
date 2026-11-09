@@ -6,6 +6,8 @@ guard_tmp="$(mktemp -d)"
 trap 'rm -rf "$guard_tmp"' EXIT
 javac -encoding UTF-8 -d "$guard_tmp" app/src/main/java/dev/wordflow/app/CardActionGuard.java scripts/CardActionGuardCliTest.java
 java -cp "$guard_tmp" CardActionGuardCliTest
+javac -encoding UTF-8 -d "$guard_tmp" app/src/main/java/dev/wordflow/app/CardPresentation.java scripts/CardPresentationCliTest.java
+java -cp "$guard_tmp" CardPresentationCliTest
 syntax_tmp="$(mktemp -d)"
 trap 'rm -rf "$guard_tmp" "$syntax_tmp"' EXIT
 javac -encoding UTF-8 -d "$syntax_tmp" scripts/SyntaxCheck.java

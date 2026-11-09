@@ -16,6 +16,16 @@ public final class WordPrefs {
     public void reviewOnly(boolean value) { data.edit().putBoolean("review", value).apply(); }
     public boolean paused() { return data.getBoolean("paused", false); }
     public void paused(boolean value) { data.edit().putBoolean("paused", value).apply(); }
+    /** Current card snapshot for the home screen; maintained by the active service. */
+    public String currentEnglish() { return data.getString("current_english", ""); }
+    public String currentMeaning() { return data.getString("current_meaning", ""); }
+    public void currentCard(String english, String meaning) {
+        data.edit().putString("current_english", english)
+                .putString("current_meaning", meaning).apply();
+    }
+    public void clearCurrentCard() {
+        data.edit().remove("current_english").remove("current_meaning").apply();
+    }
     public boolean running() { return data.getBoolean("running", false); }
     public void running(boolean value) { data.edit().putBoolean("running", value).apply(); }
 }

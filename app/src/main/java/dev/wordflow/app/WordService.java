@@ -102,6 +102,7 @@ public final class WordService extends Service {
             if (latest == null) advance();
             else {
                 current = latest;
+                prefs.currentCard(latest.english, latest.meaning);
                 updateNotification();
                 schedule();
             }
@@ -132,6 +133,7 @@ public final class WordService extends Service {
             return;
         }
         lastId = current.id;
+        prefs.currentCard(current.english, current.meaning);
         store.shown(lastId);
         updateNotification();
         schedule();
@@ -147,14 +149,11 @@ public final class WordService extends Service {
     private void updateNotification() {
         if (!active) return;
         if (current == null) return;
-        String mode = prefs.display();
-        String title = "chinese".equals(mode) ? current.meaning : current.english;
-        String subtitle = "english".equals(mode) ? "轻触查看词库" :
-                "chinese".equals(mode) ? current.english :
-                ("reveal".equals(mode) && !revealed) ? "先回忆释义，然后查看…" : current.meaning;
+        CardPresentation.Lines lines = CardPresentation.format(
+                current.english, current.meaning, prefs.display(), revealed);
         // startForeground is needed once per session; subsequent changes only update
         // the same notification rather than restarting the foreground transition.
-        getSystemService(NotificationManager.class).notify(NOTIFICATION_ID, build(title, subtitle));
+        getSystemService(NotificationManager.class).notify(NOTIFICATION_ID, build(lines.title, lines.subtitle));
     }
     private Notification build(String title, String subtitle) {
         Intent open = new Intent(this, MainActivity.class);
@@ -204,6 +203,7 @@ public final class WordService extends Service {
         sessionActive = false;
         cardToken = null;
         current = null;
+        prefs.clearCurrentCard();
         prefs.running(false);
         prefs.paused(pause);
         handler.removeCallbacksAndMessages(null);
@@ -216,6 +216,7 @@ public final class WordService extends Service {
         sessionActive = false;
         cardToken = null;
         current = null;
+        prefs.clearCurrentCard();
         prefs.running(false);
         handler.removeCallbacksAndMessages(null);
         store.close();
