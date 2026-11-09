@@ -46,6 +46,8 @@ public final class MainActivity extends Activity {
     private static final int REQUEST_FILE = 501;
     private static final int REQUEST_NOTIFY = 502;
     private static final int REQUEST_EXPORT = 503;
+    private static final int REQUEST_BACKUP_EXPORT = 504;
+    private static final int REQUEST_BACKUP_IMPORT = 505;
     private final ExecutorService io = Executors.newSingleThreadExecutor();
     private WordStore store;
     private WordPrefs prefs;
@@ -373,7 +375,17 @@ public final class MainActivity extends Activity {
         notice.addView(export, lp(-1, dp(44)));
         export.setOnClickListener(v -> createExportDocument());
         spacer(notice, 6);
-        notice.addView(text("CSV 仅包含词条和释义，不包含学习次数。删除词库前请先导出。", 12, MUTED, false));
+        notice.addView(text("CSV 仅包含词条和释义，供词库交换使用，不可用于迁移学习进度。", 12, MUTED, false));
+        spacer(notice, 14);
+        Button fullBackup = button("完整备份（JSON）", true);
+        notice.addView(fullBackup, lp(-1, dp(44)));
+        fullBackup.setOnClickListener(v -> createBackupDocument());
+        spacer(notice, 8);
+        Button restoreBackup = button("从完整备份恢复", false);
+        notice.addView(restoreBackup, lp(-1, dp(44)));
+        restoreBackup.setOnClickListener(v -> confirmRestore());
+        spacer(notice, 6);
+        notice.addView(text("完整备份包括全部单词、学习/答错/显示次数、复习到期时间及显示设置。恢复将覆盖现有词库；备份文件未加密，请自行妥善保存。", 12, MUTED, false));
         spacer(notice, 13);
         Button clear = button("清空所有单词（不可撤销）", false);
         notice.addView(clear, lp(-1, dp(44)));
@@ -483,6 +495,72 @@ public final class MainActivity extends Activity {
         });
     }
 
+
+    private void createBackupDocument() {
+        Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("application/json");
+        intent.putExtra(Intent.EXTRA_TITLE, "WordFlow-full-backup.json");
+        startActivityForResult(intent, REQUEST_BACKUP_EXPORT);
+    }
+    private void confirmRestore() {
+        if (prefs.running() || WordService.isSessionActive()) {
+            new AlertDialog.Builder(this).setTitle("请先结束学习")
+                    .setMessage("恢复数据前需要结束正在运行的通知学习会话，以免学习记录同时发生变化。")
+                    .setPositiveButton("知道了", null).show();
+            return;
+        }
+        new AlertDialog.Builder(this).setTitle("从完整备份恢复？")
+                .setMessage("将替换当前所有单词和复习记录，并恢复学习设置。请先导出当前数据留存备份。无效文件不会清空原数据。")
+                .setNegativeButton("取消", null)
+                .setPositiveButton("选择备份文件", (dialog, which) -> {
+                    Intent open = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                    open.addCategory(Intent.CATEGORY_OPENABLE);
+                    open.setType("*/*");
+                    open.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{
+                            "application/json", "text/plain", "application/octet-stream"});
+                    startActivityForResult(open, REQUEST_BACKUP_IMPORT);
+                }).show();
+    }
+    private void exportFullBackup(Uri uri) {
+        io.execute(() -> {
+            try (OutputStream output = getContentResolver().openOutputStream(uri, "wt")) {
+                if (output == null) throw new IllegalStateException("无法创建备份文件");
+                WordBackup.Snapshot snapshot =
+                        new WordBackup.Snapshot(store.exportBackup(), prefs.backupSettings());
+                byte[] bytes = WordBackup.encode(snapshot).getBytes(StandardCharsets.UTF_8);
+                output.write(bytes);
+                output.flush();
+                postUi(() -> toast("完整备份成功：" + snapshot.words.size() + " 个词条"));
+            } catch (Exception error) {
+                postUi(() -> toast("完整备份失败，请检查存储权限和剩余空间"));
+            }
+        });
+    }
+    private void restoreFullBackup(Uri uri) {
+        io.execute(() -> {
+            try (InputStream input = getContentResolver().openInputStream(uri)) {
+                if (input == null) throw new IllegalStateException("备份文件不可读");
+                // Parse and validate the entire input BEFORE starting a destructive DB transaction.
+                WordBackup.Snapshot snapshot = WordBackup.decode(readBounded(input, 25_000_000));
+                if (prefs.running() || WordService.isSessionActive())
+                    throw new IllegalStateException("请先停止当前学习会话");
+                List<WordBackup.Entry> previous = store.exportBackup();
+                store.replaceFromBackup(snapshot.words);
+                if (!prefs.restoreSettings(snapshot.settings)) {
+                    store.replaceFromBackup(previous);
+                    throw new IllegalStateException("设置保存失败，已尝试恢复原词库");
+                }
+                postUi(() -> {
+                    toast("已恢复 " + snapshot.words.size() + " 个单词及学习记录");
+                    showTab(0);
+                });
+            } catch (Exception error) {
+                postUi(() -> toast("恢复失败：备份无效或无法读取，原有数据未被主动清空"));
+            }
+        });
+    }
+
     private void editWord(WordStore.Word word) {
         LinearLayout fields = vertical();
         fields.setPadding(dp(18), dp(8), dp(18), 0);
@@ -540,6 +618,8 @@ public final class MainActivity extends Activity {
         if (result != RESULT_OK || data == null || data.getData() == null) return;
         Uri uri = data.getData();
         if (request == REQUEST_EXPORT) { exportTo(uri); return; }
+        if (request == REQUEST_BACKUP_EXPORT) { exportFullBackup(uri); return; }
+        if (request == REQUEST_BACKUP_IMPORT) { restoreFullBackup(uri); return; }
         if (request != REQUEST_FILE) return;
         io.execute(() -> {
             try (InputStream stream = getContentResolver().openInputStream(uri)) {
@@ -552,11 +632,14 @@ public final class MainActivity extends Activity {
         });
     }
     private static String readBounded(InputStream stream) throws Exception {
+        return readBounded(stream, 2_000_000);
+    }
+    private static String readBounded(InputStream stream, int maxBytes) throws Exception {
         byte[] buffer = new byte[8192];
         int count;
         java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
         while ((count = stream.read(buffer)) != -1) {
-            if (bytes.size() + count > 2_000_000) throw new IllegalArgumentException("文件太大");
+            if (bytes.size() + count > maxBytes) throw new IllegalArgumentException("文件太大");
             bytes.write(buffer, 0, count);
         }
         return bytes.toString(StandardCharsets.UTF_8.name());

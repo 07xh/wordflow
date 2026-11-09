@@ -28,4 +28,19 @@ public final class WordPrefs {
     }
     public boolean running() { return data.getBoolean("running", false); }
     public void running(boolean value) { data.edit().putBoolean("running", value).apply(); }
+    public WordBackup.SettingsData backupSettings() {
+        return new WordBackup.SettingsData(seconds(), display(), order(), reviewOnly());
+    }
+
+    /** A restored backup must never silently restart a previously running service. */
+    public boolean restoreSettings(WordBackup.SettingsData s) {
+        return data.edit().putInt("seconds", s.seconds)
+                .putString("display", s.display)
+                .putString("order", s.order)
+                .putBoolean("review", s.reviewOnly)
+                .putBoolean("running", false)
+                .putBoolean("paused", false)
+                .remove("current_english").remove("current_meaning")
+                .commit();
+    }
 }

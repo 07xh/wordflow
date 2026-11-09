@@ -143,4 +143,49 @@ public final class WordStore extends SQLiteOpenHelper {
         }
         db.update("words", values, "id=?", new String[]{String.valueOf(id)});
     }
+    /** Read all rows, including full review scheduling metadata, without the UI's 120-word limit. */
+    public synchronized List<WordBackup.Entry> exportBackup() {
+        List<WordBackup.Entry> entries = new ArrayList<>();
+        SQLiteDatabase db = getReadableDatabase();
+        db.beginTransactionNonExclusive();
+        try {
+            try (Cursor c = db.rawQuery(
+                    "SELECT id,english,meaning,known_count,fail_count,seen_count,due_at,last_seen FROM words ORDER BY id", null)) {
+                while (c.moveToNext()) entries.add(new WordBackup.Entry(
+                        c.getLong(0), c.getString(1), c.getString(2),
+                        c.getInt(3), c.getInt(4), c.getInt(5), c.getLong(6), c.getLong(7)));
+            }
+            db.setTransactionSuccessful();
+        } finally {
+            db.endTransaction();
+        }
+        return entries;
+    }
+
+    /** Atomic replacement: an invalid or conflicting row cannot erase the previous vocabulary. */
+    public synchronized void replaceFromBackup(List<WordBackup.Entry> entries) throws org.json.JSONException {
+        WordBackup.validate(new WordBackup.Snapshot(entries,
+                new WordBackup.SettingsData(20, "both", "sequential", false)));
+        SQLiteDatabase db = getWritableDatabase();
+        db.beginTransaction();
+        try {
+            db.delete("words", null, null);
+            for (WordBackup.Entry e : entries) {
+                ContentValues v = new ContentValues();
+                v.put("id", e.id);
+                v.put("english", e.english);
+                v.put("meaning", e.meaning);
+                v.put("known_count", e.known);
+                v.put("fail_count", e.failed);
+                v.put("seen_count", e.seen);
+                v.put("due_at", e.due);
+                v.put("last_seen", e.lastSeen);
+                db.insertOrThrow("words", null, v);
+            }
+            db.setTransactionSuccessful();
+        } finally {
+            db.endTransaction();
+        }
+    }
+
 }
