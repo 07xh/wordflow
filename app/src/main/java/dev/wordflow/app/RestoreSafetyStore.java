@@ -16,10 +16,18 @@ public final class RestoreSafetyStore {
     private final AtomicFile file;
 
     public RestoreSafetyStore(Context context) {
-        file = new AtomicFile(new File(context.getFilesDir(), "restore-safety.json"));
+        this(context, "restore-safety.json");
+    }
+
+    /** Separate atomic files for user undo and the in-progress recovery journal. */
+    RestoreSafetyStore(Context context, String filename) {
+        if (!"restore-safety.json".equals(filename) && !"restore-pending.json".equals(filename))
+            throw new IllegalArgumentException("Unapproved recovery filename");
+        file = new AtomicFile(new File(context.getFilesDir(), filename));
     }
 
     public boolean exists() { return file.getBaseFile().isFile(); }
+    public void clear() { file.delete(); }
 
     public void save(WordBackup.Snapshot snapshot) throws IOException, JSONException {
         byte[] bytes = WordBackup.encode(snapshot).getBytes(StandardCharsets.UTF_8);

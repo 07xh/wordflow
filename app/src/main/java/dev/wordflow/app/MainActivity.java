@@ -52,6 +52,8 @@ public final class MainActivity extends Activity {
     private WordStore store;
     private WordPrefs prefs;
     private RestoreSafetyStore safetyStore;
+    private RestoreCoordinator restoreCoordinator;
+    private volatile boolean restoreBusy;
     private LinearLayout root;
     private LinearLayout content;
     private LinearLayout wordList;
@@ -66,6 +68,17 @@ public final class MainActivity extends Activity {
         store = new WordStore(this);
         prefs = new WordPrefs(this);
         safetyStore = new RestoreSafetyStore(this);
+        restoreCoordinator = new RestoreCoordinator(this, store, prefs);
+        if (restoreCoordinator.hasPendingRecovery()) {
+            // Keep the normal UI disabled until an interrupted restore is resolved.
+            LinearLayout waiting = vertical();
+            waiting.setPadding(dp(22), dp(40), dp(22), dp(20));
+            waiting.addView(text("正在校验并恢复中断的学习数据…", 17, TEXT, true));
+            setContentView(waiting);
+            restoreBusy = true;
+            recoverInterruptedRestore();
+            return;
+        }
         // A killed process must not leave a false "running" indicator behind.
         if (prefs.running() && !WordService.isSessionActive()) {
             prefs.running(false);
@@ -73,6 +86,28 @@ public final class MainActivity extends Activity {
         }
         showTab(0);
     }
+    private void recoverInterruptedRestore() {
+        io.execute(() -> {
+            try {
+                restoreCoordinator.recoverPending();
+                postUi(() -> {
+                    restoreBusy = false;
+                    showTab(0);
+                    toast("已从中断恢复前的安全记录还原词库和学习设置");
+                });
+            } catch (Exception error) {
+                postUi(() -> new AlertDialog.Builder(this)
+                        .setTitle("中断恢复未完成")
+                        .setMessage("为了避免覆盖或混合学习记录，当前已暂停正常使用。"
+                                + "可以重新尝试恢复；原始安全日志将保留。")
+                        .setCancelable(false)
+                        .setPositiveButton("重试恢复", (dialog, which) -> recoverInterruptedRestore())
+                        .setNegativeButton("退出应用", (dialog, which) -> finish())
+                        .show());
+            }
+        });
+    }
+
     @Override protected void onResume() {
         super.onResume();
         if (!firstResume && root != null && tab == 0) showTab(0);
@@ -423,6 +458,7 @@ public final class MainActivity extends Activity {
         switch (s) { case "random": return "随机"; case "weak": return "难词优先"; default: return "顺序"; }
     }
     private void startSession() {
+        if (restoreBusy) { toast("数据恢复正在进行，请勿启动学习"); return; }
         if (store.count() == 0) { toast("请先添加或导入单词"); return; }
         if (prefs.reviewOnly() && store.dueCount() == 0) { toast("暂无到期单词，请关闭‘仅复习到期单词’后再启动"); return; }
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
@@ -465,6 +501,10 @@ public final class MainActivity extends Activity {
         return false;
     }
     private boolean sendAction(String action) {
+        if (restoreBusy && !WordService.STOP.equals(action)) {
+            toast("请先完成当前数据恢复");
+            return false;
+        }
         Intent intent = new Intent(this, WordService.class).setAction(action);
         if (WordService.NEXT.equals(action)) intent.putExtra("ui_control", true);
         try {
@@ -511,6 +551,10 @@ public final class MainActivity extends Activity {
         startActivityForResult(intent, REQUEST_BACKUP_EXPORT);
     }
     private void confirmRestore() {
+        if (restoreBusy || restoreCoordinator.hasPendingRecovery()) {
+            toast("请先完成未结束的数据恢复");
+            return;
+        }
         if (prefs.running() || WordService.isSessionActive()) {
             new AlertDialog.Builder(this).setTitle("请先结束学习")
                     .setMessage("恢复数据前需要结束正在运行的通知学习会话，以免学习记录同时发生变化。")
@@ -560,6 +604,10 @@ public final class MainActivity extends Activity {
     }
 
     private void previewRestore(WordBackup.Snapshot snapshot, boolean integrityProtected) {
+        if (restoreBusy || restoreCoordinator.hasPendingRecovery()) {
+            toast("请先完成上一次数据恢复");
+            return;
+        }
         if (prefs.running() || WordService.isSessionActive()) {
             toast("请先结束学习再恢复");
             return;
@@ -580,12 +628,19 @@ public final class MainActivity extends Activity {
                 .setTitle("预览完整备份")
                 .setMessage(preview)
                 .setNegativeButton("取消", null)
-                .setPositiveButton("确认覆盖并恢复", (dialog, which) ->
-                        io.execute(() -> applySnapshot(snapshot, true)))
+                .setPositiveButton("确认覆盖并恢复", (dialog, which) -> {
+                    if (restoreBusy) return;
+                    restoreBusy = true;
+                    io.execute(() -> applySnapshot(snapshot, true));
+                })
                 .show();
     }
 
     private void undoLastRestore() {
+        if (restoreBusy || restoreCoordinator.hasPendingRecovery()) {
+            toast("请先完成当前数据恢复");
+            return;
+        }
         if (prefs.running() || WordService.isSessionActive()) {
             toast("请先结束学习再撤销恢复");
             return;
@@ -595,55 +650,45 @@ public final class MainActivity extends Activity {
                 .setMessage("将从应用内部安全副本恢复之前的词库、学习进度和设置。"
                         + "若还需要保留现在的数据，请先导出完整 JSON。")
                 .setNegativeButton("取消", null)
-                .setPositiveButton("撤销并恢复", (dialog, which) ->
-                        io.execute(() -> {
-                            try {
-                                WordBackup.Snapshot snapshot = safetyStore.load();
-                                applySnapshot(snapshot, false);
-                            } catch (Exception error) {
-                                postUi(() -> toast("本机安全副本读取失败，当前数据未被修改"));
-                            }
-                        }))
+                .setPositiveButton("撤销并恢复", (dialog, which) -> {
+                    if (restoreBusy) return;
+                    restoreBusy = true;
+                    io.execute(() -> {
+                        try {
+                            WordBackup.Snapshot snapshot = safetyStore.load();
+                            applySnapshot(snapshot, false);
+                        } catch (Exception error) {
+                            restoreBusy = false;
+                            postUi(() -> toast("本机安全副本读取失败，当前数据未被修改"));
+                        }
+                    });
+                })
                 .show();
     }
 
     private void applySnapshot(WordBackup.Snapshot snapshot, boolean saveUndo) {
-        if (prefs.running() || WordService.isSessionActive()) {
-            postUi(() -> toast("请先停止当前学习会话"));
-            return;
-        }
-        WordBackup.Snapshot before;
         try {
-            WordBackup.validate(snapshot);
-            before = new WordBackup.Snapshot(store.exportBackup(), prefs.backupSettings());
-            // AtomicFile guarantees a complete undo file before destructive database work.
-            if (saveUndo) safetyStore.save(before);
-        } catch (Exception error) {
-            postUi(() -> toast("无法创建恢复前安全副本，已取消操作"));
-            return;
-        }
-        boolean databaseReplaced = false;
-        try {
-            store.replaceFromBackup(snapshot.words);
-            databaseReplaced = true;
-            if (!prefs.restoreSettings(snapshot.settings))
-                throw new IllegalStateException("无法保存恢复后的设置");
+            restoreCoordinator.apply(snapshot, saveUndo);
             postUi(() -> {
                 toast("已恢复 " + snapshot.words.size() + " 个单词及全部学习记录");
                 showTab(0);
             });
         } catch (Exception error) {
-            if (databaseReplaced) {
-                try {
-                    store.replaceFromBackup(before.words);
-                    if (!prefs.restoreSettings(before.settings))
-                        throw new IllegalStateException("无法回退设置");
-                } catch (Exception rollbackError) {
-                    postUi(() -> toast("恢复遇到错误，自动回滚失败；请勿卸载应用，使用本机安全副本重新恢复"));
-                    return;
-                }
+            if (restoreCoordinator.hasPendingRecovery()) {
+                // A failed rollback must be completed before allowing any further writes.
+                postUi(() -> new AlertDialog.Builder(this)
+                        .setTitle("恢复尚未完全回滚")
+                        .setMessage("安全日志仍在本机。请立即完成回滚后再继续使用。")
+                        .setCancelable(false)
+                        .setPositiveButton("恢复原数据", (dialog, which) -> recoverInterruptedRestore())
+                        .setNegativeButton("退出应用", (dialog, which) -> finish())
+                        .show());
+                return;
             }
-            postUi(() -> toast("恢复失败，原有数据已保留"));
+            postUi(() -> toast("恢复失败，已保留恢复前的词库与学习设置"));
+        } finally {
+            // Leave the UI locked when a pending journal still exists.
+            if (!restoreCoordinator.hasPendingRecovery()) restoreBusy = false;
         }
     }
 
