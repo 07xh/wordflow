@@ -35,8 +35,58 @@ jobs:
           gradle-version: '8.9'
       - name: Verify source
         run: bash scripts/verify_source.sh
+      - name: Configure private stable signing if available
+        shell: bash
+        env:
+          WF_SIGNING_BUNDLE: ${{ secrets.WORDFLOW_SIGNING_BUNDLE }}
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "pull_request" || -z "$WF_SIGNING_BUNDLE" ]]; then
+            echo "WF_SIGNING_READY=false" >> "$GITHUB_ENV"
+            echo "::notice::Stable signing secret is not configured. Debug APK only."
+          else
+            signing_dir="$RUNNER_TEMP/wordflow-signing"
+            mkdir -p "$signing_dir"
+            chmod 700 "$signing_dir"
+            printf '%s' "$WF_SIGNING_BUNDLE" | base64 --decode > "$RUNNER_TEMP/wordflow-signing.zip"
+            unzip -q "$RUNNER_TEMP/wordflow-signing.zip" -d "$signing_dir"
+            rm -f "$RUNNER_TEMP/wordflow-signing.zip"
+            test -s "$signing_dir/wordflow-v1.p12"
+            test -s "$signing_dir/signing.properties"
+            chmod 600 "$signing_dir/wordflow-v1.p12" "$signing_dir/signing.properties"
+            echo "WF_SIGNING_PROPERTIES=$signing_dir/signing.properties" >> "$GITHUB_ENV"
+            echo "WF_SIGNING_READY=true" >> "$GITHUB_ENV"
+          fi
       - name: Compile and test Android app
         run: gradle --no-daemon --stacktrace :app:testDebugUnitTest :app:assembleDebug
+      - name: Build stable signed APK
+        if: env.WF_SIGNING_READY == 'true' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        run: gradle --no-daemon --stacktrace :app:assembleRelease
+      - name: Verify stable signing certificate
+        if: env.WF_SIGNING_READY == 'true' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        shell: bash
+        run: |
+          set -euo pipefail
+          apk="app/build/outputs/apk/release/app-release.apk"
+          test -s "$apk"
+          verifier="$ANDROID_HOME/build-tools/35.0.0/apksigner"
+          "$verifier" verify --verbose "$apk"
+          expected="$(tr -d '[:space:]' < SIGNING_CERT_SHA256.txt)"
+          actual="$("$verifier" verify --print-certs "$apk" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -n 1)"
+          if [[ "$expected" != "$actual" ]]; then
+            echo "::error::Unexpected signing certificate. Refusing to publish."
+            exit 1
+          fi
+          echo "Stable signing certificate matches the pinned SHA-256 fingerprint."
+          sha256sum "$apk"
+      - name: Upload stable signed APK
+        if: env.WF_SIGNING_READY == 'true' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: WordFlow-v0.5.0-stable-signed
+          path: app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
+          retention-days: 30
       - name: Verify APK
         run: |
           set -euo pipefail
