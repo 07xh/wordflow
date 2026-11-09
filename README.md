@@ -15,3 +15,7 @@
 GitHub Actions 在推送后执行源码检查、Gradle 单元测试和 Debug APK 编译，并提供下载 Artifact。工作流：`.github/workflows/build.yml`。
 
 当前未完成真机适配验收；Android 官方 Live Updates 和 OPPO/星河岛尚未接入，普通通知不保证上岛。Debug APK 的 CI 签名可能随每次构建发生变化，升级之前请先导出词库（当前 CSV 不包含复习历史）。
+
+## 固定签名与完整备份
+
+自 v0.5.0 起，设置页提供包含学习状态的完整 JSON 备份/恢复。长期更新签名需配置仓库 Actions Secret `WORDFLOW_SIGNING_BUNDLE`；参见 [SIGNING_SETUP.md](SIGNING_SETUP.md)。私钥不包含在公开仓库中。尚未配置 Secret 时，构建输出的普通 Debug APK 可能无法覆盖其他 CI 构建。

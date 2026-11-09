@@ -1,5 +1,13 @@
 plugins { id 'com.android.application' }
 
+def wfSigningPropertiesPath = System.getenv('WF_SIGNING_PROPERTIES')
+def wfSigningProperties = new Properties()
+if (wfSigningPropertiesPath) {
+    new File(wfSigningPropertiesPath).withInputStream { input ->
+        wfSigningProperties.load(input)
+    }
+}
+
 android {
     namespace 'dev.wordflow.app'
     compileSdk 35
@@ -12,7 +20,23 @@ android {
         versionName '0.5.0'
         testInstrumentationRunner 'android.test.InstrumentationTestRunner'
     }
-    buildTypes { release { minifyEnabled false } }
+    signingConfigs {
+        if (wfSigningPropertiesPath) {
+            stable {
+                def signingRoot = new File(wfSigningPropertiesPath).parentFile
+                storeFile new File(signingRoot, wfSigningProperties.getProperty('storeFile'))
+                storePassword wfSigningProperties.getProperty('storePassword')
+                keyAlias wfSigningProperties.getProperty('keyAlias')
+                keyPassword wfSigningProperties.getProperty('keyPassword')
+            }
+        }
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+            if (wfSigningPropertiesPath) signingConfig signingConfigs.stable
+        }
+    }
     compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
     lint { abortOnError true }
 }
