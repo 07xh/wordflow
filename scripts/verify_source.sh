@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
-./scripts/test_parser.sh
+bash ./scripts/test_parser.sh
 guard_tmp="$(mktemp -d)"
 trap 'rm -rf "$guard_tmp"' EXIT
 javac -encoding UTF-8 -d "$guard_tmp" app/src/main/java/dev/wordflow/app/CardActionGuard.java scripts/CardActionGuardCliTest.java
