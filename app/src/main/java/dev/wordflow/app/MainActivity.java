@@ -571,10 +571,10 @@ public final class MainActivity extends Activity {
             if (word.failed > 0) failed++;
         }
         String preview = "备份内单词：" + snapshot.words.size() + " 个"
-                + "\\n曾记住：" + learned + " 个；有答错记录：" + failed + " 个"
-                + "\\n当前本机单词：" + store.count() + " 个"
-                + "\\n校验：" + (integrityProtected ? "SHA-256 已通过" : "旧备份（没有 SHA-256 校验）")
-                + "\\n\\n确认后会覆盖当前所有单词、复习进度与设置；"
+                + "\n曾记住：" + learned + " 个；有答错记录：" + failed + " 个"
+                + "\n当前本机单词：" + store.count() + " 个"
+                + "\n校验：" + (integrityProtected ? "SHA-256 已通过" : "旧备份（没有 SHA-256 校验）")
+                + "\n\n确认后会覆盖当前所有单词、复习进度与设置；"
                 + "操作前将保存一份本机安全副本，供撤销本次恢复。";
         new AlertDialog.Builder(this)
                 .setTitle("预览完整备份")
