@@ -1,0 +1,112 @@
+name: Normalize WordFlow source (one-time)
+
+on:
+  push:
+    paths:
+      - '.github/workflows/normalize-source.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  normalize:
+    if: github.repository == '07xh/wordflow'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - name: Restore verified v0.3.1 Android sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat buildsrc/part0{1,2,3,4}.b64 | base64 --decode > /tmp/wordflow-source.tar.xz
+          echo "c60b05e7cb96dcb48cdbcbf7f2faecc2222863f39899690c4cdd1619edd22c32  /tmp/wordflow-source.tar.xz" | sha256sum -c -
+          tar -xJf /tmp/wordflow-source.tar.xz
+          test -f app/src/main/java/dev/wordflow/app/WordService.java
+          test -f scripts/verify_source.sh
+          rm -rf buildsrc
+          rm -f .github/workflows/android.yml
+      - name: Replace packed build with direct-source build
+        shell: bash
+        run: |
+          cat > .github/workflows/build.yml <<'YAML'
+          name: WordFlow Android APK
+
+          on:
+            push:
+              branches: [main]
+            pull_request:
+            workflow_dispatch:
+
+          permissions:
+            contents: read
+
+          jobs:
+            build:
+              runs-on: ubuntu-latest
+              timeout-minutes: 35
+              steps:
+                - uses: actions/checkout@v4
+                - uses: actions/setup-java@v4
+                  with:
+                    distribution: temurin
+                    java-version: '17'
+                - name: Install Android SDK 35
+                  run: |
+                    set -euo pipefail
+                    SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | head -n 1)"
+                    test -n "$SDKMANAGER"
+                    yes | "$SDKMANAGER" --licenses > /dev/null || true
+                    "$SDKMANAGER" "platforms;android-35" "build-tools;35.0.0"
+                - uses: gradle/actions/setup-gradle@v4
+                  with:
+                    gradle-version: '8.9'
+                - name: Verify source
+                  run: bash scripts/verify_source.sh
+                - name: Compile and test
+                  run: gradle --no-daemon --stacktrace :app:testDebugUnitTest :app:assembleDebug
+                - name: Verify APK signature
+                  run: |
+                    set -euo pipefail
+                    apk="app/build/outputs/apk/debug/app-debug.apk"
+                    test -s "$apk"
+                    "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "$apk"
+                    sha256sum "$apk"
+                - uses: actions/upload-artifact@v4
+                  with:
+                    name: WordFlow-debug-apk
+                    path: app/build/outputs/apk/debug/app-debug.apk
+                    if-no-files-found: error
+                    retention-days: 14
+          YAML
+          rm -f .github/workflows/normalize-source.yml
+          cat > SOURCE_LAYOUT.md <<'EOF'
+          # Android source layout
+          
+          The original v0.3.1 GitHub deployment temporarily stored source in
+          Base64 archive chunks. Those chunks have now been replaced by ordinary
+          versioned Android sources. CI compiles these files directly; no archive
+          reconstruction or copied legacy workflow is required.
+          
+          - `app/src/main/java`: Java application source
+          - `app/src/test`: unit tests
+          - `scripts`: source checks and device smoke tests
+          - `.github/workflows/build.yml`: direct Android APK build
+          EOF
+      - name: Commit normalized sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --stat
+          if git diff --cached --quiet; then
+            echo "Already normalized"
+          else
+            git commit -m "build: replace compressed source archive with Android project"
+            git push origin HEAD:main
+          fi
