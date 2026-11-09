@@ -1,4 +1,4 @@
-# 词序 · WordFlow v0.5.1
+# 词序 · WordFlow v0.5.2
 
 自用、离线优先的 Android 通知背词应用。通过独立实现复现 FluidWords 的可观察行为，不包含其 APK 的原始代码或资源。
 
@@ -27,3 +27,14 @@ GitHub Actions 在推送后执行源码检查、Gradle 单元测试和 Debug APK
 - 每次覆盖前会在本机私有存储生成原始数据的原子安全副本，支持撤销上一次恢复。
 - 安全副本仅存在于 App 本机私有空间，卸载 App 会丢失；仍应自行导出 JSON 到可靠位置。
 - 长期 Release 固定签名仍依赖仓库 Actions Secret；未配置前只交付 Debug APK。
+
+
+## v0.5.2 增强测试
+
+在 GitHub CI 中使用 Robolectric 对真实 SQLiteOpenHelper 和本机安全副本进行测试：
+- 覆盖词条、复习进度、日期及 ID 的完整导出和恢复。
+- 使用 SQLite 触发器模拟导入中途失败，验证事务回滚不会清空旧词库。
+- 验证即使 UI 最多显示 120 词，全量备份也不会丢失其他词条。
+- 测试损坏的本机恢复快照无法加载，以及恢复设置不会重启后台会话。
+
+注意：Robolectric 是 JVM 模拟 Android 环境，不替代 Android 16 真机验收。固定签名 Release 仍需要配置私有 GitHub Secret。
