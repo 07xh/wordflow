@@ -18,7 +18,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: true
-      - name: Restore verified v0.3.1 Android sources
+      - name: Extract original verified Android project
         shell: bash
         run: |
           set -euo pipefail
@@ -29,84 +29,29 @@ jobs:
           test -f scripts/verify_source.sh
           rm -rf buildsrc
           rm -f .github/workflows/android.yml
-      - name: Replace packed build with direct-source build
-        shell: bash
-        run: |
-          cat > .github/workflows/build.yml <<'YAML'
-          name: WordFlow Android APK
-
-          on:
-            push:
-              branches: [main]
-            pull_request:
-            workflow_dispatch:
-
-          permissions:
-            contents: read
-
-          jobs:
-            build:
-              runs-on: ubuntu-latest
-              timeout-minutes: 35
-              steps:
-                - uses: actions/checkout@v4
-                - uses: actions/setup-java@v4
-                  with:
-                    distribution: temurin
-                    java-version: '17'
-                - name: Install Android SDK 35
-                  run: |
-                    set -euo pipefail
-                    SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | head -n 1)"
-                    test -n "$SDKMANAGER"
-                    yes | "$SDKMANAGER" --licenses > /dev/null || true
-                    "$SDKMANAGER" "platforms;android-35" "build-tools;35.0.0"
-                - uses: gradle/actions/setup-gradle@v4
-                  with:
-                    gradle-version: '8.9'
-                - name: Verify source
-                  run: bash scripts/verify_source.sh
-                - name: Compile and test
-                  run: gradle --no-daemon --stacktrace :app:testDebugUnitTest :app:assembleDebug
-                - name: Verify APK signature
-                  run: |
-                    set -euo pipefail
-                    apk="app/build/outputs/apk/debug/app-debug.apk"
-                    test -s "$apk"
-                    "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "$apk"
-                    sha256sum "$apk"
-                - uses: actions/upload-artifact@v4
-                  with:
-                    name: WordFlow-debug-apk
-                    path: app/build/outputs/apk/debug/app-debug.apk
-                    if-no-files-found: error
-                    retention-days: 14
-          YAML
-          rm -f .github/workflows/normalize-source.yml
           cat > SOURCE_LAYOUT.md <<'EOF'
-          # Android source layout
+          # WordFlow Android source layout
           
-          The original v0.3.1 GitHub deployment temporarily stored source in
-          Base64 archive chunks. Those chunks have now been replaced by ordinary
-          versioned Android sources. CI compiles these files directly; no archive
-          reconstruction or copied legacy workflow is required.
+          The original Base64 source archive has been replaced with normal files.
           
-          - `app/src/main/java`: Java application source
+          - `app/src/main/java`: Android Java app
           - `app/src/test`: unit tests
-          - `scripts`: source checks and device smoke tests
-          - `.github/workflows/build.yml`: direct Android APK build
+          - `scripts`: offline tests and device smoke tests
+          - `.github/workflows/build.yml`: CI Android APK build
+          
+          GitHub Actions runs Gradle against these checked-in sources.
           EOF
-      - name: Commit normalized sources
+      - name: Commit ordinary source only (leave workflows unchanged)
         shell: bash
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
+          git add -A -- README.md BUILD_APK.md CHANGELOG.md .gitignore app build.gradle gradle.properties scripts settings.gradle SOURCE_LAYOUT.md buildsrc
           git diff --cached --stat
           if git diff --cached --quiet; then
-            echo "Already normalized"
+            echo "Sources already present"
           else
-            git commit -m "build: replace compressed source archive with Android project"
+            git commit -m "build: check in editable Android project sources"
             git push origin HEAD:main
           fi
