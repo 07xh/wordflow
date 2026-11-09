@@ -47,7 +47,8 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A -- README.md BUILD_APK.md CHANGELOG.md .gitignore app build.gradle gradle.properties scripts settings.gradle SOURCE_LAYOUT.md buildsrc
+          git add -A -- .
+          git reset -q -- .github/workflows
           git diff --cached --stat
           if git diff --cached --quiet; then
             echo "Sources already present"
